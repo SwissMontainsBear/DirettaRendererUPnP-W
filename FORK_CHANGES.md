@@ -268,10 +268,10 @@ bool DirettaSync::reopenForFormatChange() {
 - Configurable buffer size (`--buffer`)
 
 **Use This Fork (X) if you need:**
-- Cleaner, more maintainable codebase
-- Lower-level SDK control via `DIRETTA::Sync`
+- Independence from `SyncBuffer` class for more fine-tuning freedom
+- Direct control over timing via `DIRETTA::Sync` and `getNewStream()` callback
 - DSD byte swap for LITTLE endian targets
-- Better format transition reliability (full reopen with silence buffers)
+- Full format transition control (reopen with silence buffers)
 
 **Note:** Both versions achieve equivalent gapless playback performance through different implementations.
 
