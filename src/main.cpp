@@ -3,27 +3,21 @@
  * @brief Main entry point for Diretta UPnP Renderer (Simplified Architecture)
  */
 
+#include "Platform.h"
 #include "DirettaRenderer.h"
 #include "DirettaSync.h"
 #include <iostream>
-#include <csignal>
 #include <memory>
 #include <thread>
 #include <chrono>
+#include <atomic>
 
-#define RENDERER_VERSION "1.2.0-simplified"
+#define RENDERER_VERSION "1.2.0-win"
 #define RENDERER_BUILD_DATE __DATE__
 #define RENDERER_BUILD_TIME __TIME__
 
 std::unique_ptr<DirettaRenderer> g_renderer;
-
-void signalHandler(int signal) {
-    std::cout << "\nSignal " << signal << " received, shutting down..." << std::endl;
-    if (g_renderer) {
-        g_renderer->stop();
-    }
-    exit(0);
-}
+std::atomic<bool> g_shutdownRequested{false};
 
 bool g_verbose = false;
 
@@ -117,11 +111,22 @@ DirettaRenderer::Config parseArguments(int argc, char* argv[]) {
 }
 
 int main(int argc, char* argv[]) {
-    signal(SIGINT, signalHandler);
-    signal(SIGTERM, signalHandler);
+    // Setup cross-platform signal/console handler
+    Platform::setupSignalHandler([]() {
+        std::cout << "\nShutdown requested..." << std::endl;
+        g_shutdownRequested = true;
+        if (g_renderer) {
+            g_renderer->stop();
+        }
+    });
 
     std::cout << "═══════════════════════════════════════════════════════\n"
               << "  Diretta UPnP Renderer v" << RENDERER_VERSION << "\n"
+#ifdef _WIN32
+              << "  Platform: Windows\n"
+#else
+              << "  Platform: Linux\n"
+#endif
               << "═══════════════════════════════════════════════════════\n"
               << std::endl;
 
@@ -153,8 +158,13 @@ int main(int argc, char* argv[]) {
         std::cout << "(Press Ctrl+C to stop)" << std::endl;
         std::cout << std::endl;
 
-        while (g_renderer->isRunning()) {
-            std::this_thread::sleep_for(std::chrono::seconds(1));
+        while (g_renderer->isRunning() && !g_shutdownRequested) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+
+        // Ensure clean shutdown
+        if (g_renderer) {
+            g_renderer->stop();
         }
 
     } catch (const std::exception& e) {

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "diretta-renderer-upnp",
+  "version": "1.2.0",
+  "description": "Diretta UPnP Renderer - High-resolution audio streaming",
+  "homepage": "https://github.com/your-repo/diretta-renderer-upnp",
+  "dependencies": [
+    {
+      "name": "ffmpeg",
+      "features": ["avformat", "avcodec", "swresample"]
+    },
+    "libupnp"
+  ]
+}

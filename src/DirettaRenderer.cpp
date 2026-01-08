@@ -5,6 +5,7 @@
  * Connection and format management delegated to DirettaSync.
  */
 
+#include "Platform.h"
 #include "DirettaRenderer.h"
 #include "DirettaSync.h"
 #include "UPnPDevice.hpp"
@@ -14,7 +15,6 @@
 #include <iomanip>
 #include <sstream>
 #include <functional>
-#include <unistd.h>
 #include <cstring>
 
 extern bool g_verbose;
@@ -25,13 +25,10 @@ extern bool g_verbose;
 //=============================================================================
 
 static std::string generateUUID() {
-    char hostname[256];
-    if (gethostname(hostname, sizeof(hostname)) != 0) {
-        strcpy(hostname, "diretta-renderer");
-    }
+    std::string hostname = Platform::getHostname();
 
     std::hash<std::string> hasher;
-    size_t hash = hasher(std::string(hostname));
+    size_t hash = hasher(hostname);
 
     std::stringstream ss;
     ss << "uuid:diretta-renderer-" << std::hex << hash;

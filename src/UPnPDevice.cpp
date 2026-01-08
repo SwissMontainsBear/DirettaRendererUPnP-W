@@ -1,3 +1,4 @@
+#include "Platform.h"
 #include "UPnPDevice.hpp"
 #include "ProtocolInfoBuilder.h"
 #include <iostream>
@@ -99,33 +100,38 @@ bool UPnPDevice::start() {
     std::string descXML = generateDescriptionXML();
     
     // 5. Create SCPD files on disk (needed for libupnp webserver)
-    // Create temporary directory structure
-    system("mkdir -p /tmp/upnp_scpd/AVTransport");
-    system("mkdir -p /tmp/upnp_scpd/RenderingControl");
-    system("mkdir -p /tmp/upnp_scpd/ConnectionManager");
-    
+    // Create temporary directory structure (cross-platform)
+    std::string scpdRoot = Platform::getUpnpScpdDirectory();
+    std::string avtDir = Platform::joinPath(scpdRoot, "AVTransport");
+    std::string rcDir = Platform::joinPath(scpdRoot, "RenderingControl");
+    std::string cmDir = Platform::joinPath(scpdRoot, "ConnectionManager");
+
+    Platform::createDirectoryRecursive(avtDir);
+    Platform::createDirectoryRecursive(rcDir);
+    Platform::createDirectoryRecursive(cmDir);
+
     // Write SCPD files to disk
-    std::ofstream avtFile("/tmp/upnp_scpd/AVTransport/scpd.xml");
+    std::ofstream avtFile(Platform::joinPath(avtDir, "scpd.xml"));
     if (avtFile.is_open()) {
         avtFile << generateAVTransportSCPD();
         avtFile.close();
     }
-    
-    std::ofstream rcFile("/tmp/upnp_scpd/RenderingControl/scpd.xml");
+
+    std::ofstream rcFile(Platform::joinPath(rcDir, "scpd.xml"));
     if (rcFile.is_open()) {
         rcFile << generateRenderingControlSCPD();
         rcFile.close();
     }
-    
-    std::ofstream cmFile("/tmp/upnp_scpd/ConnectionManager/scpd.xml");
+
+    std::ofstream cmFile(Platform::joinPath(cmDir, "scpd.xml"));
     if (cmFile.is_open()) {
         cmFile << generateConnectionManagerSCPD();
         cmFile.close();
     }
-    
+
     // 6. Enable webserver and set root directory
     UpnpEnableWebserver(1);
-    UpnpSetWebServerRootDir("/tmp/upnp_scpd");
+    UpnpSetWebServerRootDir(scpdRoot.c_str());
     
     DEBUG_LOG("[UPnPDevice] ✓ SCPD files created and webserver configured");
     

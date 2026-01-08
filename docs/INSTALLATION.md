@@ -13,6 +13,7 @@ Complete step-by-step installation guide for the Diretta UPnP Renderer.
 7. [First Run](#first-run)
 8. [Creating a Systemd Service](#creating-a-systemd-service)
 9. [Listing and Selecting Diretta Targets](#listing-and-selecting-diretta-targets)
+10. [Windows Installation](#windows-installation)
 
 ---
 
@@ -496,4 +497,205 @@ echo -1 | sudo tee /sys/module/usbcore/parameters/autosuspend
 
 ---
 
-**Installation complete!** 🎉 You're ready to enjoy bit-perfect audio streaming!
+**Installation complete!** You're ready to enjoy bit-perfect audio streaming!
+
+---
+
+## Windows Installation
+
+### System Requirements (Windows)
+
+- **OS**: Windows 10/11 (x64 or ARM64)
+- **Visual Studio 2026** (version 18) with MSVC toolset v14.50 (v145)
+- **vcpkg**: For managing FFmpeg and libupnp dependencies
+
+> **Critical**: The Diretta Host SDK Windows libraries are compiled with MSVC 14.50 (Visual Studio 2026). Using earlier versions (VS 2022 or older) will result in linker error:
+> ```
+> LINK : fatal error C1900: Il mismatch between 'P1' version and 'P2' version
+> ```
+
+### 1. Install Visual Studio 2026
+
+1. Download [Visual Studio 2026](https://visualstudio.microsoft.com/downloads/)
+2. Run the installer and select:
+   - **Workload**: "Desktop development with C++"
+   - **Individual Components**:
+     - MSVC v145 - VS 2026 C++ x64/x86 build tools (v14.50)
+     - MSVC v145 - VS 2026 C++ ARM64 build tools (v14.50) *(for ARM64 builds)*
+     - Windows 10/11 SDK (latest)
+     - C++ CMake tools for Windows
+
+### 2. Install and Configure vcpkg
+
+```powershell
+# Clone vcpkg
+git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+cd C:\vcpkg
+
+# Bootstrap vcpkg (use VS 2026 developer prompt)
+.\bootstrap-vcpkg.bat
+
+# Set environment variable (optional, for convenience)
+[Environment]::SetEnvironmentVariable("VCPKG_ROOT", "C:\vcpkg", "User")
+```
+
+### 3. Install Dependencies
+
+Open **"x64 Native Tools Command Prompt for VS 2026"** (important: must be x64, not x86):
+
+```powershell
+cd C:\vcpkg
+
+# Install FFmpeg and libupnp for x64
+.\vcpkg.exe install ffmpeg:x64-windows libupnp:x64-windows
+
+# For ARM64 builds:
+.\vcpkg.exe install ffmpeg:arm64-windows libupnp:arm64-windows
+```
+
+**Note**: If vcpkg doesn't recognize VS 2026, set environment variables:
+
+```powershell
+$env:VisualStudioVersion = "18.0"
+$env:VCINSTALLDIR = "C:\Program Files\Microsoft Visual Studio\18\Community\VC\"
+```
+
+### 4. Download Diretta Host SDK (Windows)
+
+1. Visit [diretta.link/hostsdk.html](https://www.diretta.link/hostsdk.html)
+2. Download **DirettaHostSDK_147** (Windows version)
+3. Extract to `C:\DirettaRendererUPnP\DirettaHostSDK_147`
+
+Verify the following files exist:
+```
+C:\DirettaRendererUPnP\DirettaHostSDK_147\
+├── Host\
+│   └── DirettaSync.h
+├── lib\
+│   ├── libDirettaHost_x64-win.lib
+│   ├── libDirettaHost_arm64-win.lib
+│   ├── libACQUA_x64-win.lib
+│   └── libACQUA_arm64-win.lib
+```
+
+### 5. Clone the Repository
+
+```powershell
+cd C:\DirettaRendererUPnP
+git clone https://github.com/YourRepo/DirettaRendererUPnP-W.git
+cd DirettaRendererUPnP-W
+```
+
+### 6. Build the Project
+
+#### Option A: Command Line (MSBuild)
+
+```powershell
+# Open "x64 Native Tools Command Prompt for VS 2026"
+cd C:\DirettaRendererUPnP\DirettaRendererUPnP-W
+
+# Clean previous builds
+Remove-Item -Recurse -Force .\x64, .\obj, .\bin -ErrorAction SilentlyContinue
+
+# Build Release x64
+msbuild DirettaRendererUPnP.vcxproj /t:Rebuild /p:Configuration=Release /p:Platform=x64
+
+# Build Release ARM64
+msbuild DirettaRendererUPnP.vcxproj /t:Rebuild /p:Configuration=Release /p:Platform=ARM64
+```
+
+#### Option B: Visual Studio IDE
+
+1. Open `DirettaRendererUPnP.vcxproj` in Visual Studio 2026
+2. Select **Release** | **x64** (or ARM64)
+3. Build → Rebuild Solution
+
+### 7. Verify Build
+
+```powershell
+# Check the executable was created
+dir .\bin\x64\Release\DirettaRendererUPnP.exe
+
+# Check dependencies
+dumpbin /dependents .\bin\x64\Release\DirettaRendererUPnP.exe
+```
+
+### 8. Run on Windows
+
+```powershell
+# Run as Administrator (required for network operations)
+cd C:\DirettaRendererUPnP\DirettaRendererUPnP-W
+
+# List available Diretta targets
+.\bin\x64\Release\DirettaRendererUPnP.exe --list-targets
+
+# Run with specific target
+.\bin\x64\Release\DirettaRendererUPnP.exe --target 1 --port 4005
+```
+
+### Windows Firewall Configuration
+
+**Critical**: The renderer will not be discoverable without proper firewall rules.
+
+Run as Administrator:
+
+```powershell
+# Allow the application (adjust path if installed elsewhere)
+netsh advfirewall firewall add rule name="Diretta Renderer" dir=in action=allow program="C:\DirettaRendererUPnP\DirettaRendererUPnP-W\bin\x64\Release\DirettaRendererUPnP.exe" enable=yes profile=any
+netsh advfirewall firewall add rule name="Diretta Renderer Out" dir=out action=allow program="C:\DirettaRendererUPnP\DirettaRendererUPnP-W\bin\x64\Release\DirettaRendererUPnP.exe" enable=yes profile=any
+
+# Allow SSDP discovery (required for UPnP device discovery)
+netsh advfirewall firewall add rule name="UPnP SSDP Discovery" dir=in action=allow protocol=udp localport=1900 enable=yes profile=any
+netsh advfirewall firewall add rule name="UPnP SSDP Multicast" dir=out action=allow protocol=udp remoteport=1900 enable=yes profile=any
+
+# Allow UPnP HTTP (dynamic ports used by libupnp)
+netsh advfirewall firewall add rule name="UPnP HTTP" dir=in action=allow protocol=tcp localport=49152-65535 enable=yes profile=any
+```
+
+**Verify rules are created:**
+```powershell
+netsh advfirewall firewall show rule name="Diretta Renderer"
+netsh advfirewall firewall show rule name="UPnP SSDP Discovery"
+```
+
+**To remove rules later:**
+```powershell
+netsh advfirewall firewall delete rule name="Diretta Renderer"
+netsh advfirewall firewall delete rule name="Diretta Renderer Out"
+netsh advfirewall firewall delete rule name="UPnP SSDP Discovery"
+netsh advfirewall firewall delete rule name="UPnP SSDP Multicast"
+netsh advfirewall firewall delete rule name="UPnP HTTP"
+```
+
+### Troubleshooting Windows Build
+
+#### Error: `C1900: Il mismatch between 'P1' version and 'P2' version`
+
+The Diretta SDK libraries require MSVC 14.50 (VS 2026). Solutions:
+1. Install Visual Studio 2026
+2. Or contact Diretta for libraries compiled with your VS version
+
+To check which compiler version a library requires:
+```powershell
+dumpbin /rawdata DirettaHostSDK_147\lib\libDirettaHost_x64-win.lib | findstr "Microsoft Visual Studio"
+```
+
+#### Error: `Unable to find a valid Visual Studio instance` (vcpkg)
+
+```powershell
+# Set VS 2026 path explicitly
+$env:VCINSTALLDIR = "C:\Program Files\Microsoft Visual Studio\18\Community\VC\"
+.\vcpkg.exe install ffmpeg:x64-windows
+```
+
+#### Error: `LNK2019: unresolved external symbol`
+
+Ensure all libraries are built with the same toolset (v145). Rebuild vcpkg packages:
+```powershell
+.\vcpkg.exe remove ffmpeg:x64-windows libupnp:x64-windows
+.\vcpkg.exe install ffmpeg:x64-windows libupnp:x64-windows
+```
+
+---
+
+**Windows installation complete!** You're ready to enjoy bit-perfect audio streaming on Windows!

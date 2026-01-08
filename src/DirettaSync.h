@@ -9,6 +9,7 @@
 #ifndef DIRETTA_SYNC_H
 #define DIRETTA_SYNC_H
 
+#include "Platform.h"
 #include "DirettaRingBuffer.h"
 
 #include <Sync.hpp>

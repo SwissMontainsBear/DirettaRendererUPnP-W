@@ -132,7 +132,8 @@ Diretta is a proprietary audio streaming protocol developed by Yu Harada that en
 |----------|--------|
 | **Linux x64** | ✅ Supported |
 | **Linux ARM64** | ✅ Supported |
-| **Windows** | ❌ Not supported at this stage |
+| **Windows x64** | ✅ Supported (VS 2026 required) |
+| **Windows ARM64** | ✅ Supported (VS 2026 required) |
 | **macOS** | ❌ Not supported |
 
 ### Hardware
@@ -224,6 +225,78 @@ sudo ./bin/DirettaRendererUPnP --target 1 --port 4005
 ### 7. Connect from Control Point
 
 Open your UPnP control point (JPlay, BubbleUPnP, etc.) and look for "Diretta Renderer" in available devices.
+
+---
+
+## Quick Start (Windows)
+
+### Requirements
+
+- **Visual Studio 2026** (version 18) with MSVC toolset **v145** (v14.50)
+- **vcpkg** for dependency management
+
+> **Important**: The Diretta Host SDK Windows libraries are compiled with MSVC 14.50 (VS 2026). Earlier Visual Studio versions will fail with linker error `C1900: Il mismatch between 'P1' version and 'P2' version`.
+
+### 1. Install Visual Studio 2026
+
+Download and install [Visual Studio 2026](https://visualstudio.microsoft.com/downloads/) with:
+- "Desktop development with C++" workload
+- MSVC v145 build tools (v14.50)
+- Windows 10/11 SDK
+
+### 2. Install Dependencies via vcpkg
+
+```powershell
+# Clone vcpkg if not installed
+git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+cd C:\vcpkg
+.\bootstrap-vcpkg.bat
+
+# Open VS 2026 x64 Developer Command Prompt, then:
+.\vcpkg.exe install ffmpeg:x64-windows libupnp:x64-windows
+```
+
+### 3. Download Diretta Host SDK
+
+1. Visit [diretta.link](https://www.diretta.link/hostsdk.html)
+2. Download **DirettaHostSDK_147** (Windows version)
+3. Extract to `C:\DirettaRendererUPnP\DirettaHostSDK_147`
+
+### 4. Build
+
+```powershell
+# Open "x64 Native Tools Command Prompt for VS 2026"
+cd C:\DirettaRendererUPnP\DirettaRendererUPnP-W
+
+# Build Release
+msbuild DirettaRendererUPnP.vcxproj /p:Configuration=Release /p:Platform=x64
+
+# Or open DirettaRendererUPnP.vcxproj in Visual Studio 2026 and build
+```
+
+### 5. Configure Windows Firewall
+
+Run as Administrator:
+```powershell
+# Allow the application
+netsh advfirewall firewall add rule name="Diretta Renderer" dir=in action=allow program="C:\DirettaRendererUPnP\DirettaRendererUPnP-W\bin\x64\Release\DirettaRendererUPnP.exe" enable=yes profile=any
+netsh advfirewall firewall add rule name="Diretta Renderer Out" dir=out action=allow program="C:\DirettaRendererUPnP\DirettaRendererUPnP-W\bin\x64\Release\DirettaRendererUPnP.exe" enable=yes profile=any
+
+# Allow SSDP discovery (UDP 1900)
+netsh advfirewall firewall add rule name="UPnP SSDP Discovery" dir=in action=allow protocol=udp localport=1900 enable=yes profile=any
+netsh advfirewall firewall add rule name="UPnP SSDP Multicast" dir=out action=allow protocol=udp remoteport=1900 enable=yes profile=any
+
+# Allow UPnP HTTP dynamic ports
+netsh advfirewall firewall add rule name="UPnP HTTP" dir=in action=allow protocol=tcp localport=49152-65535 enable=yes profile=any
+```
+
+### 6. Run
+
+```powershell
+# Run as Administrator (required for network operations)
+.\bin\x64\Release\DirettaRendererUPnP.exe --list-targets
+.\bin\x64\Release\DirettaRendererUPnP.exe --target 1
+```
 
 ---
 

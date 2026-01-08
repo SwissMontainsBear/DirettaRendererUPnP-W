@@ -9,13 +9,13 @@
 #include <cstring>
 #include <algorithm>
 
-extern "C" {
-
 // ============================================================================
 // Logging system - Variable globale définie dans main.cpp
 // ============================================================================
 extern bool g_verbose;
 #define DEBUG_LOG(x) if (g_verbose) { std::cout << x << std::endl; }
+
+extern "C" {
 #include <libavutil/opt.h>
 }
 

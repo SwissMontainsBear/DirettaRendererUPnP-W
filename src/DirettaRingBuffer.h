@@ -9,6 +9,13 @@
 #ifndef DIRETTA_RING_BUFFER_H
 #define DIRETTA_RING_BUFFER_H
 
+// Prevent Windows min/max macros from breaking std::min/std::max
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#endif
+
 #include <vector>
 #include <atomic>
 #include <cstdint>
