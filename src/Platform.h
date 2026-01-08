@@ -229,6 +229,37 @@ inline void sleepMs(unsigned int ms) {
 }
 
 //=============================================================================
+// Thread Priority (for audio performance)
+//=============================================================================
+
+#ifdef _WIN32
+inline void setCurrentThreadHighPriority() {
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+}
+
+inline void setCurrentThreadRealtimePriority() {
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+}
+
+inline void setProcessHighPriority() {
+    SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
+}
+#else
+inline void setCurrentThreadHighPriority() {
+    // Linux: Would need root and pthread_setschedparam
+    // Left as no-op for non-root usage
+}
+
+inline void setCurrentThreadRealtimePriority() {
+    // Linux: Would need root and SCHED_FIFO
+}
+
+inline void setProcessHighPriority() {
+    // Linux: nice -10 or similar
+}
+#endif
+
+//=============================================================================
 // WinSock Initialization (Windows only)
 //=============================================================================
 

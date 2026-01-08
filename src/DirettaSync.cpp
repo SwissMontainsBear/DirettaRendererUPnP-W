@@ -1062,6 +1062,10 @@ bool DirettaSync::startSyncWorker() {
     m_stopRequested = false;
 
     m_workerThread = std::thread([this]() {
+        // Boost thread priority for Diretta streaming
+        Platform::setCurrentThreadRealtimePriority();
+        DIRETTA_LOG("Worker thread started (realtime priority)");
+
         while (m_running.load(std::memory_order_acquire)) {
             if (!syncWorker()) {
                 std::this_thread::sleep_for(std::chrono::microseconds(100));

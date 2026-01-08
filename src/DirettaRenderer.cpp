@@ -506,7 +506,9 @@ void DirettaRenderer::upnpThreadFunc() {
 }
 
 void DirettaRenderer::audioThreadFunc() {
-    DEBUG_LOG("[Audio Thread] Started");
+    // Boost thread priority for audio performance
+    Platform::setCurrentThreadHighPriority();
+    DEBUG_LOG("[Audio Thread] Started (high priority)");
 
     // Buffer-level flow control thresholds (like MPD's Delay() approach)
     constexpr float BUFFER_HIGH_THRESHOLD = 0.5f;  // Throttle when >50% full

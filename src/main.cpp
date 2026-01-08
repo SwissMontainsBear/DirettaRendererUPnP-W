@@ -12,6 +12,13 @@
 #include <chrono>
 #include <atomic>
 
+// Windows high-resolution timer support
+#ifdef _WIN32
+#include <windows.h>
+#include <mmsystem.h>
+#pragma comment(lib, "winmm.lib")
+#endif
+
 #define RENDERER_VERSION "1.2.0-win"
 #define RENDERER_BUILD_DATE __DATE__
 #define RENDERER_BUILD_TIME __TIME__
@@ -111,6 +118,14 @@ DirettaRenderer::Config parseArguments(int argc, char* argv[]) {
 }
 
 int main(int argc, char* argv[]) {
+    // Windows: Request 1ms timer resolution for better audio timing
+#ifdef _WIN32
+    timeBeginPeriod(1);
+#endif
+
+    // Set process to high priority for audio performance
+    Platform::setProcessHighPriority();
+
     // Setup cross-platform signal/console handler
     Platform::setupSignalHandler([]() {
         std::cout << "\nShutdown requested..." << std::endl;
@@ -169,10 +184,18 @@ int main(int argc, char* argv[]) {
 
     } catch (const std::exception& e) {
         std::cerr << "Exception: " << e.what() << std::endl;
+#ifdef _WIN32
+        timeEndPeriod(1);
+#endif
         return 1;
     }
 
     std::cout << "\nRenderer stopped" << std::endl;
+
+    // Windows: Restore default timer resolution
+#ifdef _WIN32
+    timeEndPeriod(1);
+#endif
 
     return 0;
 }

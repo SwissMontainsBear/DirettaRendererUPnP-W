@@ -75,12 +75,13 @@ struct AudioFormat {
 //=============================================================================
 
 namespace DirettaBuffer {
-    constexpr float DSD_BUFFER_SECONDS = 0.8f;
-    constexpr float PCM_BUFFER_SECONDS = 1.0f;
+    // Windows needs larger buffers due to ~15.6ms timer resolution (vs Linux ~1ms)
+    constexpr float DSD_BUFFER_SECONDS = 2.0f;   // Increased from 0.8f for Windows
+    constexpr float PCM_BUFFER_SECONDS = 2.0f;   // Increased from 1.0f for Windows
 
-    constexpr size_t DSD_PREFILL_MS = 200;
-    constexpr size_t PCM_PREFILL_MS = 50;
-    constexpr size_t PCM_LOWRATE_PREFILL_MS = 100;
+    constexpr size_t DSD_PREFILL_MS = 500;       // Increased from 200 for Windows
+    constexpr size_t PCM_PREFILL_MS = 150;       // Increased from 50 for Windows
+    constexpr size_t PCM_LOWRATE_PREFILL_MS = 200; // Increased from 100 for Windows
 
     constexpr unsigned int DAC_STABILIZATION_MS = 100;
     constexpr unsigned int ONLINE_WAIT_MS = 2000;
