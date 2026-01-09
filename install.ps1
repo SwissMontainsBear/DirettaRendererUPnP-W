@@ -10,7 +10,10 @@
 
 .NOTES
     Requirements:
-    - Visual Studio 2026 with C++ workload (must be installed manually)
+    - MSBuild and C++ compiler (cl.exe) - one of:
+      * Visual Studio 2026 with C++ workload
+      * Build Tools for Visual Studio 2026
+      * Run from 'x64 Native Tools Command Prompt' (adds compilers to PATH)
     - Git for Windows (must be installed manually)
     - Npcap (must be installed manually for RAW socket mode)
     - Diretta Host SDK (must be downloaded manually)
@@ -107,6 +110,23 @@ function Test-Administrator {
 
 function Request-Elevation {
     if (-not (Test-Administrator)) {
+        # Check if we have build tools in current PATH (e.g., Native Tools Command Prompt)
+        $hasBuildTools = (Get-Command cl.exe -ErrorAction SilentlyContinue) -or
+                         (Get-Command msbuild.exe -ErrorAction SilentlyContinue)
+
+        if ($hasBuildTools) {
+            Write-Warning "This script requires Administrator privileges."
+            Write-Warning "You appear to be running from a Developer/Native Tools Command Prompt."
+            Write-Warning "The elevated session will NOT inherit your current PATH with build tools."
+            Write-Host ""
+            Write-Host "Please do ONE of the following:" -ForegroundColor Yellow
+            Write-Host "  1. Run this script from an ELEVATED Native Tools Command Prompt" -ForegroundColor White
+            Write-Host "     (Right-click 'x64 Native Tools Command Prompt' -> Run as Administrator)" -ForegroundColor Gray
+            Write-Host "  2. Or press Enter to continue anyway (may fail to find compilers)" -ForegroundColor White
+            Write-Host ""
+            $response = Read-Host "Press Enter to continue or Ctrl+C to abort"
+        }
+
         Write-Warning "This script requires Administrator privileges."
         Write-Info "Restarting with elevation..."
 
@@ -159,11 +179,17 @@ function Find-VisualStudio {
         }
     }
 
-    # Fallback: check common paths
+    # Fallback: check common paths (VS 2026 = version 18.x)
+    # Check both naming conventions: year-based (2026) and version-based (18)
     $commonPaths = @(
         "${env:ProgramFiles}\Microsoft Visual Studio\2026\Community",
         "${env:ProgramFiles}\Microsoft Visual Studio\2026\Professional",
-        "${env:ProgramFiles}\Microsoft Visual Studio\2026\Enterprise"
+        "${env:ProgramFiles}\Microsoft Visual Studio\2026\Enterprise",
+        "${env:ProgramFiles}\Microsoft Visual Studio\2026\Insiders",
+        "${env:ProgramFiles}\Microsoft Visual Studio\18\Community",
+        "${env:ProgramFiles}\Microsoft Visual Studio\18\Professional",
+        "${env:ProgramFiles}\Microsoft Visual Studio\18\Enterprise",
+        "${env:ProgramFiles}\Microsoft Visual Studio\18\Insiders"
     )
 
     foreach ($path in $commonPaths) {
@@ -179,9 +205,11 @@ function Find-VisualStudio {
 function Find-MSBuild {
     param([string]$VsPath)
 
+    # Try VS installation path first
     if ($VsPath) {
         $msbuildPath = Join-Path $VsPath "MSBuild\Current\Bin\MSBuild.exe"
         if (Test-Path $msbuildPath) {
+            Write-Success "Found MSBuild at: $msbuildPath"
             return $msbuildPath
         }
     }
@@ -189,10 +217,68 @@ function Find-MSBuild {
     # Try to find in PATH
     $msbuild = Get-Command msbuild.exe -ErrorAction SilentlyContinue
     if ($msbuild) {
+        Write-Success "Found MSBuild in PATH: $($msbuild.Source)"
         return $msbuild.Source
     }
 
+    # Fallback: search common MSBuild locations
+    Write-Info "Searching for MSBuild in common locations..."
+    $msbuildPaths = @(
+        "${env:ProgramFiles}\Microsoft Visual Studio\2026\*\MSBuild\Current\Bin\MSBuild.exe",
+        "${env:ProgramFiles}\Microsoft Visual Studio\18\*\MSBuild\Current\Bin\MSBuild.exe",
+        "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2026\*\MSBuild\Current\Bin\MSBuild.exe",
+        "${env:ProgramFiles(x86)}\Microsoft Visual Studio\18\*\MSBuild\Current\Bin\MSBuild.exe",
+        "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\*\MSBuild\Current\Bin\MSBuild.exe"
+    )
+
+    foreach ($pattern in $msbuildPaths) {
+        $found = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($found) {
+            Write-Success "Found MSBuild at: $($found.FullName)"
+            return $found.FullName
+        }
+    }
+
     return $null
+}
+
+function Test-CLCompiler {
+    Write-Info "Checking for C++ compiler (cl.exe)..."
+
+    $cl = Get-Command cl.exe -ErrorAction SilentlyContinue
+    if ($cl) {
+        try {
+            $version = & cl.exe 2>&1 | Select-Object -First 1
+            Write-Success "Found C++ compiler: $version"
+            return $true
+        }
+        catch {
+            Write-Success "Found C++ compiler at: $($cl.Source)"
+            return $true
+        }
+    }
+
+    # Fallback: search common cl.exe locations
+    Write-Info "Searching for cl.exe in common locations..."
+    $clPaths = @(
+        "${env:ProgramFiles}\Microsoft Visual Studio\2026\*\VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe",
+        "${env:ProgramFiles}\Microsoft Visual Studio\18\*\VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe",
+        "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2026\*\VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe",
+        "${env:ProgramFiles(x86)}\Microsoft Visual Studio\18\*\VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe",
+        "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\*\VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe"
+    )
+
+    foreach ($pattern in $clPaths) {
+        $found = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($found) {
+            Write-Success "Found C++ compiler at: $($found.FullName)"
+            Write-Warning "cl.exe is not in PATH - build may fail without proper environment setup"
+            Write-Info "Consider running from 'x64 Native Tools Command Prompt for VS'"
+            return $true
+        }
+    }
+
+    return $false
 }
 
 function Test-Git {
@@ -222,24 +308,68 @@ function Test-Vcpkg {
 function Test-Npcap {
     Write-Info "Checking for Npcap..."
 
+    # Check multiple indicators of Npcap installation
+    $npcapFound = $false
     $npcapPath = "${env:ProgramFiles}\Npcap"
-    $dumpcap = Join-Path $npcapPath "dumpcap.exe"
 
-    if (Test-Path $dumpcap) {
-        Write-Success "Found Npcap at: $npcapPath"
-
-        # Verify it can see interfaces
-        try {
-            $interfaces = & $dumpcap -D 2>$null
-            if ($interfaces) {
-                $count = ($interfaces | Measure-Object -Line).Lines
-                Write-Success "Npcap sees $count network interface(s)"
-                return $true
+    # Method 1: Check Program Files installation directory
+    if (Test-Path $npcapPath) {
+        # Look for common Npcap files
+        $npcapFiles = @(
+            (Join-Path $npcapPath "NPFInstall.exe"),
+            (Join-Path $npcapPath "NpcapHelper.exe"),
+            (Join-Path $npcapPath "LICENSE")
+        )
+        foreach ($file in $npcapFiles) {
+            if (Test-Path $file) {
+                Write-Success "Found Npcap at: $npcapPath"
+                $npcapFound = $true
+                break
             }
         }
-        catch {
-            Write-Warning "Npcap installed but cannot enumerate interfaces"
+    }
+
+    # Method 2: Check System32 for Npcap DLLs
+    if (-not $npcapFound) {
+        $npcapSys32 = "${env:SystemRoot}\System32\Npcap"
+        $wpcapDll = Join-Path $npcapSys32 "wpcap.dll"
+        if (Test-Path $wpcapDll) {
+            Write-Success "Found Npcap DLLs at: $npcapSys32"
+            $npcapFound = $true
         }
+    }
+
+    # Method 3: Check registry
+    if (-not $npcapFound) {
+        $regPath = "HKLM:\SOFTWARE\Npcap"
+        if (Test-Path $regPath) {
+            Write-Success "Found Npcap in registry"
+            $npcapFound = $true
+        }
+    }
+
+    # Method 4: Check for Npcap service
+    if (-not $npcapFound) {
+        $npcapService = Get-Service -Name "npcap" -ErrorAction SilentlyContinue
+        if ($npcapService) {
+            Write-Success "Found Npcap service (status: $($npcapService.Status))"
+            $npcapFound = $true
+        }
+    }
+
+    if ($npcapFound) {
+        # Try to get version from registry
+        try {
+            $regPath = "HKLM:\SOFTWARE\Npcap"
+            if (Test-Path $regPath) {
+                $version = (Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue).VersionNumber
+                if ($version) {
+                    Write-Info "Npcap version: $version"
+                }
+            }
+        }
+        catch { }
+        return $true
     }
 
     return $false
@@ -485,7 +615,7 @@ Request-Elevation
 Write-Header "Diretta UPnP Renderer - Windows Installation"
 
 Write-Host "This script will:" -ForegroundColor White
-Write-Host "  1. Check prerequisites (VS 2026, Git, Npcap, SDK)"
+Write-Host "  1. Check prerequisites (MSBuild, cl.exe, Git, Npcap, SDK)"
 Write-Host "  2. Install/update vcpkg and dependencies"
 Write-Host "  3. Build the project"
 Write-Host "  4. Copy required DLLs"
@@ -500,28 +630,37 @@ Write-Step 1 "Checking Prerequisites"
 
 $prereqsMissing = @()
 
-# Visual Studio 2026
+# Visual Studio 2026 or standalone build tools
 $vsPath = Find-VisualStudio
-if (-not $vsPath) {
-    Write-Error "Visual Studio 2026 not found!"
-    $prereqsMissing += @{
-        Name = "Visual Studio 2026"
-        Instructions = @(
-            "Download from: https://visualstudio.microsoft.com/downloads/",
-            "Install with 'Desktop development with C++' workload",
-            "Ensure MSVC v145 toolset is selected"
-        )
-    }
-}
-
 $msbuildPath = Find-MSBuild $vsPath
-if ($vsPath -and -not $msbuildPath) {
+$hasCL = Test-CLCompiler
+
+if (-not $msbuildPath) {
     Write-Error "MSBuild not found!"
     $prereqsMissing += @{
         Name = "MSBuild"
         Instructions = @(
-            "Reinstall Visual Studio with C++ workload",
-            "Or run from 'x64 Native Tools Command Prompt for VS 2026'"
+            "Option 1: Install Visual Studio 2026 with 'Desktop development with C++' workload",
+            "Option 2: Install 'Build Tools for Visual Studio 2026' from:",
+            "          https://visualstudio.microsoft.com/downloads/#build-tools",
+            "Option 3: Run this script from 'x64 Native Tools Command Prompt'"
+        )
+    }
+}
+elseif (-not $vsPath) {
+    Write-Info "Visual Studio not found, but MSBuild is available in PATH"
+    Write-Success "Found MSBuild at: $msbuildPath"
+}
+
+if (-not $hasCL) {
+    Write-Error "C++ compiler (cl.exe) not found!"
+    $prereqsMissing += @{
+        Name = "C++ Compiler (cl.exe)"
+        Instructions = @(
+            "Option 1: Install Visual Studio 2026 with 'Desktop development with C++' workload",
+            "Option 2: Install 'Build Tools for Visual Studio 2026' with C++ tools",
+            "Option 3: Run this script from 'x64 Native Tools Command Prompt'",
+            "          which sets up the compiler environment automatically"
         )
     }
 }
