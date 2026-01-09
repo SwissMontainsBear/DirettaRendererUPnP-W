@@ -2,6 +2,45 @@
 
 > **Important**: This project requires **Visual Studio 2026** (version 18) with MSVC toolset **v145** (v14.50). The Diretta Host SDK libraries are compiled with this toolset and will not link with earlier Visual Studio versions.
 
+---
+
+## About the Windows Build Process
+
+Due to the licensing terms of the Diretta Host SDK (personal use only, redistribution prohibited), we are unable to provide a pre-built installer or binary distribution for Windows.
+
+However, as a courtesy to Windows users, we provide three integration utilities to simplify the build, launch, and deployment process:
+
+| Utility | Description |
+|---------|-------------|
+| **`install.ps1`** | Build automation script - checks prerequisites, installs dependencies, compiles the project, and configures firewall |
+| **`Start-DirettaRenderer.ps1`** | Enhanced launcher - auto-elevation, Npcap verification, configuration persistence, interactive menu |
+| **`Install-Service.ps1`** | Windows service installer - appliance mode operation with auto-start at boot |
+
+Users must still manually install Visual Studio 2026, Npcap, and download the Diretta Host SDK from [diretta.link](https://www.diretta.link).
+
+---
+
+## Quick Start (Automated)
+
+If you have Visual Studio 2026, Git, Npcap, and the Diretta SDK already installed, you can use the automated installation script:
+
+```powershell
+# Run as Administrator in PowerShell
+Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process
+.\install.ps1
+```
+
+The script will:
+- Check all prerequisites and report what's missing
+- Install/update vcpkg and dependencies
+- Build the project
+- Copy required DLLs
+- Configure Windows Firewall
+
+For manual step-by-step installation, continue below.
+
+---
+
 ## Step 1: Install Visual Studio 2026
 
 You need the C++ compiler from Microsoft.
@@ -64,7 +103,36 @@ This will take several minutes. Wait for completion.
 
 ---
 
-## Step 5: Build the Project
+## Step 5: Install Npcap (Required for RAW Socket Mode)
+
+Npcap is **mandatory** to enable Diretta MSMODE3 (RAW socket mode), which provides optimal performance for high-resolution audio streaming (DSD256/512/1024).
+
+Without Npcap, the Diretta SDK falls back to MSMODE2 (UDP), which has lower performance and may cause audio issues at high sample rates.
+
+1. Download Npcap from: https://npcap.com/#download
+
+2. Run the installer **as Administrator**
+
+3. **Important:** Select these options during installation:
+   - ✅ **Install Npcap in WinPcap API-compatible Mode**
+   - ❌ **Support raw 802.11 traffic (experimental)** unless you have wifi interface
+   - ❌ **Install Npcap in Admin-only Mode** - Leave this **UNCHECKED** (unless you always run as Administrator)
+
+4. Complete the installation and **reboot your computer**
+
+### Verifying Npcap Installation
+
+After reboot, verify Npcap sees your network adapters:
+
+```cmd
+"C:\Program Files\Npcap\dumpcap.exe" -D
+```
+
+You should see your network interfaces listed. The interface used for Diretta must appear here for RAW mode to work.
+
+---
+
+## Step 6: Build the Project
 
 ### Option A: Visual Studio IDE
 
@@ -85,9 +153,9 @@ msbuild DirettaRendererUPnP.vcxproj /p:Configuration=Release /p:Platform=x64
 
 ---
 
-## Step 6: Copy DLLs
+## Step 7: Copy DLLs
 
-Copy required DLLs to the output folder:
+Copy required DLLs to the output folder (in case the linker has not done it):
 
 ```cmd
 copy C:\vcpkg\installed\x64-windows\bin\*.dll bin\x64\Release\
@@ -95,7 +163,7 @@ copy C:\vcpkg\installed\x64-windows\bin\*.dll bin\x64\Release\
 
 ---
 
-## Step 7: Configure Windows Firewall
+## Step 8: Configure Windows Firewall
 
 Run as Administrator:
 
@@ -163,10 +231,46 @@ vcpkg install ffmpeg:x64-windows libupnp[webserver]:x64-windows
 
 ### Missing DLLs at Runtime
 
-Copy DLLs from vcpkg (Step 6), or rebuild with static linking:
+Copy DLLs from vcpkg (Step 7), or rebuild with static linking:
 ```cmd
 vcpkg install ffmpeg:x64-windows-static libupnp[webserver]:x64-windows-static
 ```
+
+### Diretta Falls Back to UDP Mode (MSMODE2)
+
+If the renderer logs show UDP mode instead of RAW mode, Npcap is not working correctly:
+
+1. **Verify Npcap is installed:**
+   ```cmd
+   "C:\Program Files\Npcap\dumpcap.exe" -D
+   ```
+   If this fails, reinstall Npcap.
+
+2. **Check installation options:** Reinstall Npcap with:
+   - ✅ WinPcap API-compatible Mode
+   - ✅ Support raw 802.11 traffic
+   - ❌ Admin-only Mode (unchecked)
+
+3. **Reboot after installation** - Required for Npcap driver to load.
+
+4. **Run as Administrator:** RAW sockets may require elevated privileges:
+   ```cmd
+   runas /user:Administrator DirettaRendererUPnP.exe --target 1
+   ```
+
+5. **USB-Ethernet adapters:** Some USB network adapters have driver limitations that prevent RAW socket mode. Try:
+   - Using the onboard NIC instead
+   - Using a PCIe NIC instead of USB
+   - Updating the adapter's driver
+
+### Npcap Not Detecting Network Interface
+
+If `dumpcap -D` doesn't show your network adapter:
+
+1. Check Device Manager for driver issues
+2. Try reinstalling the network adapter driver
+3. For USB adapters, try a different USB port
+4. Some virtual/VPN adapters are not supported
 
 ---
 
@@ -200,8 +304,63 @@ This contains:
 2. Install Git for Windows
 3. Clone and bootstrap vcpkg
 4. vcpkg install ffmpeg:x64-windows libupnp[webserver]:x64-windows
-5. Build the project
-6. Copy DLLs to output folder
-7. Configure Windows Firewall
-8. Run the renderer
+5. Install Npcap (required for RAW socket mode / MSMODE3)
+6. Build the project
+7. Copy DLLs to output folder
+8. Configure Windows Firewall
+9. Run the renderer
+```
+
+---
+
+## Running as a Windows Service (Appliance Mode)
+
+For headless or appliance-style operation, you can install the renderer as a Windows service that starts automatically at boot.
+
+### Installing the Service
+
+```powershell
+# Run as Administrator
+.\Install-Service.ps1 -Install -Target 1 -Name "Living Room Diretta"
+```
+
+Or run interactively to be prompted for configuration:
+```powershell
+.\Install-Service.ps1 -Install
+```
+
+### Service Management Commands
+
+| Command | Description |
+|---------|-------------|
+| `.\Install-Service.ps1 -Status` | Show service status and configuration |
+| `.\Install-Service.ps1 -Start` | Start the service |
+| `.\Install-Service.ps1 -Stop` | Stop the service |
+| `.\Install-Service.ps1 -Restart` | Restart the service |
+| `.\Install-Service.ps1 -Logs` | View recent log output |
+| `.\Install-Service.ps1 -Configure` | Change service settings |
+| `.\Install-Service.ps1 -Uninstall` | Remove the service |
+
+You can also manage the service through Windows Services (`services.msc`):
+- Service name: `DirettaRenderer`
+- Display name: `Diretta UPnP Renderer`
+
+### Service Features
+
+- **Auto-start**: Starts automatically when Windows boots
+- **Auto-restart**: Restarts automatically if the renderer crashes (5 second delay)
+- **Log rotation**: Logs written to `logs\` folder with automatic rotation at 1MB
+- **Configuration persistence**: Settings saved to `service-config.json`
+
+### Log Files
+
+Service logs are located at:
+```
+logs\diretta-stdout.log   # Standard output
+logs\diretta-stderr.log   # Error output
+```
+
+To follow logs in real-time:
+```powershell
+Get-Content .\logs\diretta-stdout.log -Wait -Tail 20
 ```
