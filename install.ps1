@@ -320,6 +320,35 @@ function Test-Git {
         return $true
     }
 
+    # Fallback: search common Git installation paths
+    Write-Info "Searching for Git in common locations..."
+    $gitPaths = @(
+        "${env:ProgramFiles}\Git\bin\git.exe",
+        "${env:ProgramFiles}\Git\cmd\git.exe",
+        "${env:ProgramFiles(x86)}\Git\bin\git.exe",
+        "${env:ProgramFiles(x86)}\Git\cmd\git.exe",
+        "${env:LOCALAPPDATA}\Programs\Git\bin\git.exe",
+        "${env:LOCALAPPDATA}\Programs\Git\cmd\git.exe"
+    )
+
+    foreach ($path in $gitPaths) {
+        if (Test-Path $path) {
+            try {
+                $version = & $path --version 2>$null
+                Write-Success "Found Git at: $path"
+                Write-Info "Git version: $version"
+                Write-Warning "Git is not in PATH - adding temporarily for this session"
+                $gitDir = Split-Path -Parent $path
+                $env:PATH = "$gitDir;$env:PATH"
+                return $true
+            }
+            catch {
+                Write-Success "Found Git at: $path"
+                return $true
+            }
+        }
+    }
+
     return $false
 }
 
@@ -639,8 +668,10 @@ function Configure-Firewall {
     $rules = @()
 
     foreach ($plat in $Platforms) {
-        $exePath = Join-Path $ProjectDir "bin\$plat\Release\DirettaRendererUPnP.exe"
-        if (Test-Path $exePath) {
+        if ([string]::IsNullOrWhiteSpace($plat)) { continue }
+        $exePath = [System.IO.Path]::GetFullPath((Join-Path $Script:ProjectDir "bin\$plat\Release\DirettaRendererUPnP.exe"))
+        Write-Info "Checking for executable: $exePath"
+        if ((Test-Path $exePath -ErrorAction SilentlyContinue)) {
             $rules += @{
                 Name = "Diretta Renderer ($plat) - Inbound"
                 Direction = "Inbound"
