@@ -18,8 +18,21 @@
     - Npcap (must be installed manually for RAW socket mode)
     - Diretta Host SDK (must be downloaded manually)
 
+.PARAMETER Platform
+    Target platform: x64, ARM64, or All. Default is x64.
+    Use "All" to build both x64 and ARM64 (cross-compilation).
+
 .EXAMPLE
     .\install.ps1
+    Build for x64 (default).
+
+.EXAMPLE
+    .\install.ps1 -Platform ARM64
+    Cross-compile for ARM64 from x64 host.
+
+.EXAMPLE
+    .\install.ps1 -Platform All
+    Build for both x64 and ARM64 platforms.
 
 .EXAMPLE
     .\install.ps1 -SkipBuild
@@ -31,6 +44,8 @@
 #>
 
 param(
+    [ValidateSet("x64", "ARM64", "All")]
+    [string]$Platform = "x64",
     [switch]$SkipBuild,
     [switch]$Force,
     [switch]$SkipFirewall,
@@ -46,10 +61,24 @@ $ProgressPreference = "SilentlyContinue"  # Speed up web requests
 
 $Script:ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Script:ProjectDir = $ScriptDir
-$Script:BinDir = Join-Path $ProjectDir "bin\x64\Release"
-$Script:ExePath = Join-Path $BinDir "DirettaRendererUPnP.exe"
 $Script:VcpkgRoot = "C:\vcpkg"
-$Script:VcpkgBin = Join-Path $VcpkgRoot "installed\x64-windows\bin"
+
+# Platform configuration
+$Script:PlatformConfig = @{
+    "x64" = @{
+        VcpkgTriplet = "x64-windows"
+        DirettaLib = "libDirettaHost_x64-win.lib"
+        AcquaLib = "libACQUA_x64-win.lib"
+    }
+    "ARM64" = @{
+        VcpkgTriplet = "arm64-windows"
+        DirettaLib = "libDirettaHost_arm64-win.lib"
+        AcquaLib = "libACQUA_arm64-win.lib"
+    }
+}
+
+# Determine which platforms to build
+$Script:TargetPlatforms = if ($Platform -eq "All") { @("x64", "ARM64") } else { @($Platform) }
 
 # SDK search paths (in order of preference)
 $Script:SdkSearchPaths = @(
@@ -376,14 +405,30 @@ function Test-Npcap {
 }
 
 function Find-DirettaSDK {
+    param([string[]]$Platforms = $TargetPlatforms)
+
     Write-Info "Checking for Diretta Host SDK..."
 
     foreach ($path in $SdkSearchPaths) {
         $resolvedPath = [System.IO.Path]::GetFullPath($path)
-        $libPath = Join-Path $resolvedPath "lib\libDirettaHost_x64-win.lib"
+        $allLibsFound = $true
+        $missingLibs = @()
 
-        if (Test-Path $libPath) {
+        foreach ($plat in $Platforms) {
+            $libName = $PlatformConfig[$plat].DirettaLib
+            $libPath = Join-Path $resolvedPath "lib\$libName"
+
+            if (-not (Test-Path $libPath)) {
+                $allLibsFound = $false
+                $missingLibs += $libName
+            }
+        }
+
+        if ($allLibsFound) {
             Write-Success "Found Diretta SDK at: $resolvedPath"
+            foreach ($plat in $Platforms) {
+                Write-Info "  - $($PlatformConfig[$plat].DirettaLib) found"
+            }
             return $resolvedPath
         }
     }
@@ -391,24 +436,47 @@ function Find-DirettaSDK {
     return $null
 }
 
+function Get-MissingSDKLibraries {
+    param([string]$SdkPath, [string[]]$Platforms = $TargetPlatforms)
+
+    $missing = @()
+    foreach ($plat in $Platforms) {
+        $libName = $PlatformConfig[$plat].DirettaLib
+        $libPath = Join-Path $SdkPath "lib\$libName"
+        if (-not (Test-Path $libPath)) {
+            $missing += @{ Platform = $plat; Library = $libName }
+        }
+    }
+    return $missing
+}
+
 function Test-VcpkgDependencies {
+    param([string[]]$Platforms = $TargetPlatforms)
+
     Write-Info "Checking vcpkg dependencies..."
 
-    $ffmpegDll = Join-Path $VcpkgBin "avformat.dll"
-    $upnpDll = Join-Path $VcpkgBin "libupnp.dll"
+    $allFound = $true
+    foreach ($plat in $Platforms) {
+        $triplet = $PlatformConfig[$plat].VcpkgTriplet
+        $vcpkgBinPath = Join-Path $VcpkgRoot "installed\$triplet\bin"
 
-    $hasFFmpeg = Test-Path $ffmpegDll
-    $hasUpnp = Test-Path $upnpDll
+        $ffmpegDll = Join-Path $vcpkgBinPath "avformat.dll"
+        $upnpDll = Join-Path $vcpkgBinPath "libupnp.dll"
 
-    if ($hasFFmpeg -and $hasUpnp) {
-        Write-Success "vcpkg dependencies are installed"
-        return $true
+        $hasFFmpeg = Test-Path $ffmpegDll
+        $hasUpnp = Test-Path $upnpDll
+
+        if ($hasFFmpeg -and $hasUpnp) {
+            Write-Success "  [$plat] vcpkg dependencies installed"
+        }
+        else {
+            if (-not $hasFFmpeg) { Write-Warning "  [$plat] FFmpeg not found" }
+            if (-not $hasUpnp) { Write-Warning "  [$plat] libupnp not found" }
+            $allFound = $false
+        }
     }
 
-    if (-not $hasFFmpeg) { Write-Warning "FFmpeg not found in vcpkg" }
-    if (-not $hasUpnp) { Write-Warning "libupnp not found in vcpkg" }
-
-    return $false
+    return $allFound
 }
 
 # ============================================================================
@@ -450,33 +518,44 @@ function Install-Vcpkg {
 }
 
 function Install-VcpkgDependencies {
+    param([string[]]$Platforms = $TargetPlatforms)
+
     Write-Info "Installing vcpkg dependencies (this may take several minutes)..."
 
     Push-Location $VcpkgRoot
 
-    Write-Info "Installing FFmpeg..."
-    & .\vcpkg.exe install ffmpeg:x64-windows
+    foreach ($plat in $Platforms) {
+        $triplet = $PlatformConfig[$plat].VcpkgTriplet
 
-    if ($LASTEXITCODE -ne 0) {
-        Pop-Location
-        throw "Failed to install FFmpeg"
-    }
+        Write-Info "Installing FFmpeg for $plat ($triplet)..."
+        & .\vcpkg.exe install "ffmpeg:$triplet"
 
-    Write-Info "Installing libupnp..."
-    & .\vcpkg.exe install "libupnp[webserver]:x64-windows"
+        if ($LASTEXITCODE -ne 0) {
+            Pop-Location
+            throw "Failed to install FFmpeg for $plat"
+        }
 
-    if ($LASTEXITCODE -ne 0) {
-        Pop-Location
-        throw "Failed to install libupnp"
+        Write-Info "Installing libupnp for $plat ($triplet)..."
+        & .\vcpkg.exe install "libupnp[webserver]:$triplet"
+
+        if ($LASTEXITCODE -ne 0) {
+            Pop-Location
+            throw "Failed to install libupnp for $plat"
+        }
+
+        Write-Success "  [$plat] Dependencies installed"
     }
 
     Pop-Location
 
-    Write-Success "Dependencies installed successfully"
+    Write-Success "All dependencies installed successfully"
 }
 
 function Build-Project {
-    param([string]$MSBuildPath)
+    param(
+        [string]$MSBuildPath,
+        [string[]]$Platforms = $TargetPlatforms
+    )
 
     Write-Info "Building Diretta UPnP Renderer..."
 
@@ -486,64 +565,99 @@ function Build-Project {
         throw "Project file not found: $vcxproj"
     }
 
-    # Create output directory
-    if (-not (Test-Path $BinDir)) {
-        New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
+    $builtPlatforms = @()
+
+    foreach ($plat in $Platforms) {
+        $binDir = Join-Path $ProjectDir "bin\$plat\Release"
+        $exePath = Join-Path $binDir "DirettaRendererUPnP.exe"
+
+        # Create output directory
+        if (-not (Test-Path $binDir)) {
+            New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+        }
+
+        Write-Info "Building for $plat..."
+        & $MSBuildPath $vcxproj /p:Configuration=Release /p:Platform=$plat /verbosity:minimal
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "Build failed for $plat with exit code $LASTEXITCODE"
+        }
+
+        if (-not (Test-Path $exePath)) {
+            throw "Build completed but executable not found at: $exePath"
+        }
+
+        Write-Success "  [$plat] Build successful: $exePath"
+        $builtPlatforms += $plat
     }
 
-    Write-Info "Running MSBuild..."
-    & $MSBuildPath $vcxproj /p:Configuration=Release /p:Platform=x64 /verbosity:minimal
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "Build failed with exit code $LASTEXITCODE"
-    }
-
-    if (-not (Test-Path $ExePath)) {
-        throw "Build completed but executable not found at: $ExePath"
-    }
-
-    Write-Success "Build successful!"
-    Write-Info "Executable: $ExePath"
+    Write-Success "All builds completed successfully!"
+    return $builtPlatforms
 }
 
 function Copy-Dependencies {
-    Write-Info "Copying DLLs to output directory..."
+    param([string[]]$Platforms = $TargetPlatforms)
 
-    if (-not (Test-Path $VcpkgBin)) {
-        Write-Warning "vcpkg bin directory not found: $VcpkgBin"
-        return
-    }
+    Write-Info "Copying DLLs to output directories..."
 
-    $dlls = Get-ChildItem -Path $VcpkgBin -Filter "*.dll"
-    $copied = 0
+    foreach ($plat in $Platforms) {
+        $triplet = $PlatformConfig[$plat].VcpkgTriplet
+        $vcpkgBinPath = Join-Path $VcpkgRoot "installed\$triplet\bin"
+        $binDir = Join-Path $ProjectDir "bin\$plat\Release"
 
-    foreach ($dll in $dlls) {
-        $destPath = Join-Path $BinDir $dll.Name
-        if (-not (Test-Path $destPath) -or $Force) {
-            Copy-Item $dll.FullName $destPath -Force
-            $copied++
+        if (-not (Test-Path $vcpkgBinPath)) {
+            Write-Warning "  [$plat] vcpkg bin directory not found: $vcpkgBinPath"
+            continue
         }
-    }
 
-    Write-Success "Copied $copied DLL(s) to output directory"
+        if (-not (Test-Path $binDir)) {
+            Write-Warning "  [$plat] Output directory not found: $binDir"
+            continue
+        }
+
+        $dlls = Get-ChildItem -Path $vcpkgBinPath -Filter "*.dll"
+        $copied = 0
+
+        foreach ($dll in $dlls) {
+            $destPath = Join-Path $binDir $dll.Name
+            if (-not (Test-Path $destPath) -or $Force) {
+                Copy-Item $dll.FullName $destPath -Force
+                $copied++
+            }
+        }
+
+        Write-Success "  [$plat] Copied $copied DLL(s)"
+    }
 }
 
 function Configure-Firewall {
+    param([string[]]$Platforms = $TargetPlatforms)
+
     Write-Info "Configuring Windows Firewall..."
 
-    $rules = @(
-        @{
-            Name = "Diretta Renderer - Inbound"
-            Direction = "Inbound"
-            Program = $ExePath
-            Action = "Allow"
-        },
-        @{
-            Name = "Diretta Renderer - Outbound"
-            Direction = "Outbound"
-            Program = $ExePath
-            Action = "Allow"
-        },
+    # Build list of rules - start with program-specific rules for each platform
+    $rules = @()
+
+    foreach ($plat in $Platforms) {
+        $exePath = Join-Path $ProjectDir "bin\$plat\Release\DirettaRendererUPnP.exe"
+        if (Test-Path $exePath) {
+            $rules += @{
+                Name = "Diretta Renderer ($plat) - Inbound"
+                Direction = "Inbound"
+                Program = $exePath
+                Action = "Allow"
+            }
+            $rules += @{
+                Name = "Diretta Renderer ($plat) - Outbound"
+                Direction = "Outbound"
+                Program = $exePath
+                Action = "Allow"
+            }
+        }
+    }
+
+    # Add common UPnP rules
+    $rules += @(
         @{
             Name = "UPnP SSDP Discovery"
             Direction = "Inbound"
@@ -614,10 +728,14 @@ Request-Elevation
 
 Write-Header "Diretta UPnP Renderer - Windows Installation"
 
+$platformList = $TargetPlatforms -join ", "
+Write-Host "Target platform(s): " -ForegroundColor White -NoNewline
+Write-Host $platformList -ForegroundColor Cyan
+Write-Host ""
 Write-Host "This script will:" -ForegroundColor White
 Write-Host "  1. Check prerequisites (MSBuild, cl.exe, Git, Npcap, SDK)"
-Write-Host "  2. Install/update vcpkg and dependencies"
-Write-Host "  3. Build the project"
+Write-Host "  2. Install/update vcpkg and dependencies for: $platformList"
+Write-Host "  3. Build the project for: $platformList"
 Write-Host "  4. Copy required DLLs"
 Write-Host "  5. Configure Windows Firewall"
 Write-Host ""
@@ -696,13 +814,15 @@ if (-not $hasNpcap) {
 }
 
 # Diretta SDK
-$sdkPath = Find-DirettaSDK
+$sdkPath = Find-DirettaSDK -Platforms $TargetPlatforms
 if (-not $sdkPath) {
-    Write-Error "Diretta Host SDK not found!"
+    Write-Error "Diretta Host SDK not found or missing platform libraries!"
+    $requiredLibs = ($TargetPlatforms | ForEach-Object { $PlatformConfig[$_].DirettaLib }) -join ", "
     $prereqsMissing += @{
         Name = "Diretta Host SDK v147"
         Instructions = @(
             "Download from: https://www.diretta.link",
+            "Required libraries: $requiredLibs",
             "Extract to one of these locations:",
             "  - $($SdkSearchPaths[0])",
             "  - $($SdkSearchPaths[1])",
@@ -765,21 +885,42 @@ else {
 
 Write-Step 3 "Building Project"
 
+$builtPlatforms = @()
+
 if ($SkipBuild) {
     Write-Info "Skipping build (--SkipBuild specified)"
-}
-elseif ((Test-Path $ExePath) -and -not $Force) {
-    Write-Info "Executable already exists: $ExePath"
-
-    if (Confirm-Continue "Rebuild anyway?") {
-        Build-Project $msbuildPath
-    }
-    else {
-        Write-Info "Skipping build"
+    # Check which executables already exist
+    foreach ($plat in $TargetPlatforms) {
+        $exePath = Join-Path $ProjectDir "bin\$plat\Release\DirettaRendererUPnP.exe"
+        if (Test-Path $exePath) {
+            $builtPlatforms += $plat
+        }
     }
 }
 else {
-    Build-Project $msbuildPath
+    # Check if any executables already exist
+    $existingExes = @()
+    foreach ($plat in $TargetPlatforms) {
+        $exePath = Join-Path $ProjectDir "bin\$plat\Release\DirettaRendererUPnP.exe"
+        if (Test-Path $exePath) {
+            $existingExes += $plat
+        }
+    }
+
+    if ($existingExes.Count -gt 0 -and -not $Force) {
+        Write-Info "Executables already exist for: $($existingExes -join ', ')"
+
+        if (Confirm-Continue "Rebuild anyway?") {
+            $builtPlatforms = Build-Project -MSBuildPath $msbuildPath -Platforms $TargetPlatforms
+        }
+        else {
+            Write-Info "Skipping build"
+            $builtPlatforms = $existingExes
+        }
+    }
+    else {
+        $builtPlatforms = Build-Project -MSBuildPath $msbuildPath -Platforms $TargetPlatforms
+    }
 }
 
 # ============================================================================
@@ -788,11 +929,11 @@ else {
 
 Write-Step 4 "Copying Dependencies"
 
-if (Test-Path $ExePath) {
-    Copy-Dependencies
+if ($builtPlatforms.Count -gt 0) {
+    Copy-Dependencies -Platforms $builtPlatforms
 }
 else {
-    Write-Warning "Executable not found, skipping DLL copy"
+    Write-Warning "No executables found, skipping DLL copy"
 }
 
 # ============================================================================
@@ -804,11 +945,11 @@ Write-Step 5 "Configuring Firewall"
 if ($SkipFirewall) {
     Write-Info "Skipping firewall configuration (--SkipFirewall specified)"
 }
-elseif (Test-Path $ExePath) {
-    Configure-Firewall
+elseif ($builtPlatforms.Count -gt 0) {
+    Configure-Firewall -Platforms $builtPlatforms
 }
 else {
-    Write-Warning "Executable not found, skipping firewall configuration"
+    Write-Warning "No executables found, skipping firewall configuration"
 }
 
 # ============================================================================
@@ -817,15 +958,28 @@ else {
 
 Write-Header "Installation Complete!"
 
-if (Test-Path $ExePath) {
+if ($builtPlatforms.Count -gt 0) {
     Write-Success "Diretta UPnP Renderer is ready to use!"
     Write-Host ""
+    Write-Host "Built executables:" -ForegroundColor Cyan
+
+    foreach ($plat in $builtPlatforms) {
+        $exePath = Join-Path $ProjectDir "bin\$plat\Release\DirettaRendererUPnP.exe"
+        Write-Host "  [$plat] $exePath" -ForegroundColor White
+    }
+
+    Write-Host ""
     Write-Host "Quick Start:" -ForegroundColor Cyan
+
+    # Show example using first built platform
+    $firstPlat = $builtPlatforms[0]
+    $firstExePath = Join-Path $ProjectDir "bin\$firstPlat\Release\DirettaRendererUPnP.exe"
+
     Write-Host "  1. List available targets:"
-    Write-Host "     $ExePath --list-targets" -ForegroundColor White
+    Write-Host "     `"$firstExePath`" --list-targets" -ForegroundColor White
     Write-Host ""
     Write-Host "  2. Start the renderer:"
-    Write-Host "     $ExePath --target 1" -ForegroundColor White
+    Write-Host "     `"$firstExePath`" --target 1" -ForegroundColor White
     Write-Host ""
     Write-Host "  3. Or use the launcher:"
     Write-Host "     .\Launch-DirettaRenderer.bat" -ForegroundColor White

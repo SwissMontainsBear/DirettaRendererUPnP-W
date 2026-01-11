@@ -27,13 +27,21 @@ If you have Visual Studio 2026, Git, Npcap, and the Diretta SDK already installe
 ```powershell
 # Run as Administrator in PowerShell
 Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process
+
+# Build for x64 (default)
 .\install.ps1
+
+# Build for ARM64 (cross-compile from x64)
+.\install.ps1 -Platform ARM64
+
+# Build for both x64 and ARM64
+.\install.ps1 -Platform All
 ```
 
 The script will:
 - Check all prerequisites and report what's missing
-- Install/update vcpkg and dependencies
-- Build the project
+- Install/update vcpkg and dependencies for target platform(s)
+- Build the project for target platform(s)
 - Copy required DLLs
 - Configure Windows Firewall
 
@@ -54,6 +62,7 @@ You need the C++ compiler from Microsoft.
 
 4. In Individual Components, ensure these are selected:
    - MSVC v145 - VS 2026 C++ x64/x86 build tools (v14.50)
+   - MSVC v145 - VS 2026 C++ ARM64 build tools (v14.50) *(for ARM64 cross-compilation)*
    - Windows 10/11 SDK (latest)
 
 5. Click Install and wait for completion
@@ -290,10 +299,62 @@ This contains:
 
 ## Architecture Support
 
-| Platform | Diretta Library | vcpkg triplet |
-|----------|-----------------|---------------|
-| x64 (64-bit) | `libDirettaHost_x64-win.lib` | `x64-windows` |
-| ARM64 | `libDirettaHost_arm64-win.lib` | `arm64-windows` |
+| Platform | Diretta Library | vcpkg triplet | Output Directory |
+|----------|-----------------|---------------|------------------|
+| x64 (64-bit) | `libDirettaHost_x64-win.lib` | `x64-windows` | `bin\x64\Release\` |
+| ARM64 | `libDirettaHost_arm64-win.lib` | `arm64-windows` | `bin\ARM64\Release\` |
+
+---
+
+## Cross-Compiling for ARM64 from x64
+
+You can build ARM64 binaries on an x64 Windows machine (cross-compilation). This is useful for building ARM64 executables to deploy on Windows on ARM devices (Surface Pro X, etc.).
+
+### Prerequisites for ARM64 Cross-Compilation
+
+1. **ARM64 Build Tools**: In Visual Studio Installer, add:
+   - "MSVC v145 - VS 2026 C++ ARM64 build tools (v14.50)"
+
+2. **ARM64 vcpkg Dependencies**:
+   ```cmd
+   cd C:\vcpkg
+   vcpkg install ffmpeg:arm64-windows libupnp[webserver]:arm64-windows
+   ```
+
+3. **ARM64 Diretta SDK Library**: Ensure you have `libDirettaHost_arm64-win.lib` in your SDK's `lib\` folder.
+
+### Building ARM64 (Automated)
+
+```powershell
+# Cross-compile for ARM64
+.\install.ps1 -Platform ARM64
+
+# Build both x64 and ARM64
+.\install.ps1 -Platform All
+```
+
+### Building ARM64 (Manual)
+
+```cmd
+# From x64 Native Tools Command Prompt
+msbuild DirettaRendererUPnP.vcxproj /p:Configuration=Release /p:Platform=ARM64
+
+# Copy ARM64 DLLs
+copy C:\vcpkg\installed\arm64-windows\bin\*.dll bin\ARM64\Release\
+```
+
+### Output Locations
+
+After building for multiple platforms:
+```
+bin\
+├── x64\
+│   └── Release\
+│       └── DirettaRendererUPnP.exe    # x64 executable
+└── ARM64\
+    └── Release\
+        └── DirettaRendererUPnP.exe    # ARM64 executable
+```
 
 ---
 
