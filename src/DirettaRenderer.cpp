@@ -5,7 +5,6 @@
  * Connection and format management delegated to DirettaSync.
  */
 
-#include "Platform.h"
 #include "DirettaRenderer.h"
 #include "DirettaSync.h"
 #include "UPnPDevice.hpp"
@@ -15,6 +14,7 @@
 #include <iomanip>
 #include <sstream>
 #include <functional>
+#include <unistd.h>
 #include <cstring>
 
 extern bool g_verbose;
@@ -25,10 +25,13 @@ extern bool g_verbose;
 //=============================================================================
 
 static std::string generateUUID() {
-    std::string hostname = Platform::getHostname();
+    char hostname[256];
+    if (gethostname(hostname, sizeof(hostname)) != 0) {
+        strcpy(hostname, "diretta-renderer");
+    }
 
     std::hash<std::string> hasher;
-    size_t hash = hasher(hostname);
+    size_t hash = hasher(std::string(hostname));
 
     std::stringstream ss;
     ss << "uuid:diretta-renderer-" << std::hex << hash;
@@ -413,13 +416,16 @@ bool DirettaRenderer::start() {
                 m_audioEngine->setCurrentURI(m_currentURI, m_currentMetadata, true);
             }
 
-            // Don't close DirettaSync here - keep connection alive for quick track transitions
-            // DirettaSync will only close on:
-            // - Format family change (PCM↔DSD) - handled in audio callback
-            // - App shutdown - handled in DirettaRenderer::stop()
+            // Close Diretta connection on Stop (not Pause) for proper resource cleanup
+            // This ensures:
+            // - Clean handoff when switching to a different renderer
+            // - Proper resource release on the Diretta target
+            // - Control point gets expected clean disconnection
+            // Trade-off: subsequent Play will need to reconnect (~300ms)
             if (m_direttaSync) {
                 m_direttaSync->stopPlayback(true);
-                // m_direttaSync->close();  // Removed - keep connection open
+                m_direttaSync->close();
+                std::cout << "[DirettaRenderer] Diretta connection closed on Stop" << std::endl;
             }
 
             m_upnp->notifyStateChange("STOPPED");
@@ -506,9 +512,7 @@ void DirettaRenderer::upnpThreadFunc() {
 }
 
 void DirettaRenderer::audioThreadFunc() {
-    // Boost thread priority for audio performance
-    Platform::setCurrentThreadHighPriority();
-    DEBUG_LOG("[Audio Thread] Started (high priority)");
+    DEBUG_LOG("[Audio Thread] Started");
 
     // Buffer-level flow control thresholds (like MPD's Delay() approach)
     constexpr float BUFFER_HIGH_THRESHOLD = 0.5f;  // Throttle when >50% full
