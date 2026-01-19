@@ -876,6 +876,10 @@ void DirettaSync::configureRingPCM(int rate, int channels, int direttaBps, int i
     m_needDsdByteSwap.store(false, std::memory_order_release);
     m_isLowBitrate.store(direttaBps <= 2 && rate <= 48000, std::memory_order_release);
 
+    // C1: Increment generation counters to invalidate cached values
+    m_formatGeneration.fetch_add(1, std::memory_order_release);
+    m_consumerStateGen.fetch_add(1, std::memory_order_release);
+
     size_t bytesPerSecond = static_cast<size_t>(rate) * channels * direttaBps;
     size_t ringSize = DirettaBuffer::calculateBufferSize(bytesPerSecond, DirettaBuffer::PCM_BUFFER_SECONDS);
 
@@ -902,6 +906,10 @@ void DirettaSync::configureRingDSD(uint32_t byteRate, int channels) {
     m_need16To32Upsample.store(false, std::memory_order_release);
     m_channels.store(channels, std::memory_order_release);
     m_isLowBitrate.store(false, std::memory_order_release);
+
+    // C1: Increment generation counters to invalidate cached values
+    m_formatGeneration.fetch_add(1, std::memory_order_release);
+    m_consumerStateGen.fetch_add(1, std::memory_order_release);
 
     uint32_t bytesPerSecond = byteRate * channels;
     size_t ringSize = DirettaBuffer::calculateBufferSize(bytesPerSecond, DirettaBuffer::DSD_BUFFER_SECONDS);
@@ -1020,14 +1028,28 @@ size_t DirettaSync::sendAudio(const uint8_t* data, size_t numSamples) {
     RingAccessGuard ringGuard(m_ringUsers, m_reconfiguring);
     if (!ringGuard.active()) return 0;
 
-    // Atomic snapshot - no mutex needed
-    bool dsdMode = m_isDsdMode.load(std::memory_order_acquire);
-    bool pack24bit = m_need24BitPack.load(std::memory_order_acquire);
-    bool upsample16to32 = m_need16To32Upsample.load(std::memory_order_acquire);
-    bool needBitReversal = m_needDsdBitReversal.load(std::memory_order_acquire);
-    bool needByteSwap = m_needDsdByteSwap.load(std::memory_order_acquire);
-    int numChannels = m_channels.load(std::memory_order_acquire);
-    int bytesPerSample = m_bytesPerSample.load(std::memory_order_acquire);
+    // C1: Generation counter optimization - single atomic load vs 7 loads
+    // Only reload format atomics when format has actually changed
+    uint32_t gen = m_formatGeneration.load(std::memory_order_acquire);
+    if (gen != m_cachedFormatGen) {
+        m_cachedDsdMode = m_isDsdMode.load(std::memory_order_acquire);
+        m_cachedPack24bit = m_need24BitPack.load(std::memory_order_acquire);
+        m_cachedUpsample16to32 = m_need16To32Upsample.load(std::memory_order_acquire);
+        m_cachedNeedBitReversal = m_needDsdBitReversal.load(std::memory_order_acquire);
+        m_cachedNeedByteSwap = m_needDsdByteSwap.load(std::memory_order_acquire);
+        m_cachedChannels = m_channels.load(std::memory_order_acquire);
+        m_cachedBytesPerSample = m_bytesPerSample.load(std::memory_order_acquire);
+        m_cachedFormatGen = gen;
+    }
+
+    // Use cached values (no atomic loads in hot path)
+    bool dsdMode = m_cachedDsdMode;
+    bool pack24bit = m_cachedPack24bit;
+    bool upsample16to32 = m_cachedUpsample16to32;
+    bool needBitReversal = m_cachedNeedBitReversal;
+    bool needByteSwap = m_cachedNeedByteSwap;
+    int numChannels = m_cachedChannels;
+    int bytesPerSample = m_cachedBytesPerSample;
 
     size_t written = 0;
     size_t totalBytes;
@@ -1100,27 +1122,45 @@ float DirettaSync::getBufferLevel() const {
 // DIRETTA::Sync Overrides
 //=============================================================================
 
-bool DirettaSync::getNewStream(DIRETTA::Stream& stream) {
+bool DirettaSync::getNewStream(diretta_stream& baseStream) {
+    // SDK 148 WORKAROUND: Do NOT use DIRETTA::Stream class methods!
+    // After Stop→Play (track change), SDK 148's Stream objects are corrupted.
+    // Any method call (resize, get_16, etc.) causes segfault.
+    // Solution: Use our own persistent buffer and directly set diretta_stream fields.
+
     m_workerActive = true;
 
-    // Snapshot config under mutex
-    int currentBytesPerBuffer;
-    uint8_t currentSilenceByte;
-    bool currentIsDsd;
-    size_t currentRingSize;
-    {
+    // C1: Generation counter optimization for stable state
+    // Single atomic load in common case (format rarely changes during playback)
+    uint32_t gen = m_consumerStateGen.load(std::memory_order_acquire);
+    if (gen != m_cachedConsumerGen) {
+        // Cold path: reload stable state values (under mutex for consistency)
         std::lock_guard<std::mutex> lock(m_configMutex);
-        currentBytesPerBuffer = m_bytesPerBuffer.load(std::memory_order_acquire);
-        currentSilenceByte = m_ringBuffer.silenceByte();
-        currentIsDsd = m_isDsdMode.load(std::memory_order_acquire);
-        currentRingSize = m_ringBuffer.size();
+        m_cachedBytesPerBuffer = m_bytesPerBuffer.load(std::memory_order_acquire);
+        m_cachedSilenceByte = m_ringBuffer.silenceByte();
+        m_cachedConsumerIsDsd = m_isDsdMode.load(std::memory_order_acquire);
+        m_cachedRingSize = m_ringBuffer.size();
+        m_cachedConsumerGen = gen;
     }
 
-    if (stream.size() != static_cast<size_t>(currentBytesPerBuffer)) {
-        stream.resize(currentBytesPerBuffer);
+    // Hot path: use cached values (no atomic loads, no mutex)
+    int currentBytesPerBuffer = m_cachedBytesPerBuffer;
+    uint8_t currentSilenceByte = m_cachedSilenceByte;
+    bool currentIsDsd = m_cachedConsumerIsDsd;
+    size_t currentRingSize = m_cachedRingSize;
+
+    // SDK 148 WORKAROUND: Use our own buffer instead of Stream::resize()
+    // Resize our persistent buffer if needed
+    if (m_streamData.size() != static_cast<size_t>(currentBytesPerBuffer)) {
+        m_streamData.resize(currentBytesPerBuffer);
     }
 
-    uint8_t* dest = reinterpret_cast<uint8_t*>(stream.get_16());
+    // Directly set the diretta_stream C structure fields
+    baseStream.Data.P = m_streamData.data();
+    baseStream.Size = currentBytesPerBuffer;
+
+    // Use our buffer as destination (replaces stream.get_16())
+    uint8_t* dest = m_streamData.data();
 
     // Shutdown silence
     int silenceRemaining = m_silenceBuffersRemaining.load(std::memory_order_acquire);

@@ -27,6 +27,8 @@
 #include <thread>
 #include <iostream>
 #include <cmath>
+#include <vector>
+#include <cstring>
 
 //=============================================================================
 // Debug Logging
@@ -240,7 +242,7 @@ protected:
     // DIRETTA::Sync Overrides
     //=========================================================================
 
-    bool getNewStream(DIRETTA::Stream& stream) override;
+    bool getNewStream(diretta_stream& stream) override;
     bool getNewStreamCmp() override { return true; }
     bool startSyncWorker() override;
     void statusUpdate() override {}
@@ -320,6 +322,12 @@ private:
     // Ring buffer
     DirettaRingBuffer m_ringBuffer;
 
+    // SDK 148: Persistent stream buffer to bypass corrupted Stream class
+    // After Stop→Play (track change), SDK 148's Stream objects are corrupted.
+    // Any method call on them (resize(), get_16(), etc.) causes segfault.
+    // We manage our own buffer and directly set diretta_stream.Data.P/Size.
+    std::vector<uint8_t> m_streamData;
+
     // Format parameters (atomic for lock-free reading)
     std::atomic<int> m_sampleRate{44100};
     std::atomic<int> m_channels{2};
@@ -339,6 +347,31 @@ private:
     std::atomic<bool> m_postOnlineDelayDone{false};
     std::atomic<int> m_silenceBuffersRemaining{0};
     std::atomic<int> m_stabilizationCount{0};
+
+    // Format generation counter - incremented on ANY format change
+    // Allows sendAudio to skip reloading atomics when format hasn't changed
+    std::atomic<uint32_t> m_formatGeneration{0};
+
+    // Cached format values for sendAudio fast path (updated when generation changes)
+    // Protected by generation counter check - no race with configureRingXXX
+    uint32_t m_cachedFormatGen{0};
+    bool m_cachedDsdMode{false};
+    bool m_cachedPack24bit{false};
+    bool m_cachedUpsample16to32{false};
+    bool m_cachedNeedBitReversal{false};
+    bool m_cachedNeedByteSwap{false};
+    int m_cachedChannels{2};
+    int m_cachedBytesPerSample{2};
+
+    // C1: Consumer generation counter for getNewStream fast path
+    std::atomic<uint32_t> m_consumerStateGen{0};
+
+    // Cached consumer state (only accessed by worker thread)
+    uint32_t m_cachedConsumerGen{0};
+    int m_cachedBytesPerBuffer{176};
+    uint8_t m_cachedSilenceByte{0};
+    bool m_cachedConsumerIsDsd{false};
+    size_t m_cachedRingSize{0};
 
     // Statistics
     std::atomic<int> m_streamCount{0};
