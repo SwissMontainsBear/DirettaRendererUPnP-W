@@ -1,100 +1,110 @@
 # Changelog
 
-## 2026-01-13
+## 2026-01-23 - SDK 148 Migration & Windows Build Improvements
 
-### 1. DSD→PCM Transition Fix for I2S Targets
+### SDK 148 Migration
 
-- Added special handling in `DirettaSync::open()` for DSD→PCM format transitions
-- I2S/LVDS targets are more timing-sensitive than USB and need cleaner transitions
-- DSD→PCM now performs: full `DIRETTA::Sync::close()` + 800ms delay + fresh `open()`
-- Other format transitions (PCM→DSD, PCM→PCM, DSD→DSD) unchanged
-- **Files:** `src/DirettaSync.cpp` (lines 372-421)
+Migrated from Diretta Host SDK 147 to SDK 148.
 
-### 2. UPnP Stop Signal Handling
+**SDK 148 Breaking Changes Handled:**
+1. `getNewStream()` signature changed from `Stream&` to `diretta_stream&` (pure virtual)
+2. Stream copy semantics deleted (only move allowed)
+3. Inheritance changed from `private diretta_stream` to `public diretta_stream`
 
-- Diretta connection now properly closed when UPnP Stop action received
-- Ensures clean handoff when switching renderers
-- Pause action unchanged (keeps connection open)
-- **Files:** `src/DirettaRenderer.cpp` (lines 419-431)
+**Solution Implemented:**
+- Bypass `DIRETTA::Stream` class methods entirely
+- Use persistent `std::vector<uint8_t> m_streamData` buffer
+- Directly set `diretta_stream` C structure fields:
+  ```cpp
+  baseStream.Data.P = m_streamData.data();
+  baseStream.Size = currentBytesPerBuffer;
+  ```
 
-### 3. Enhanced Target Listing
+This avoids SDK 148's corrupted Stream objects after Stop→Play sequences.
 
-- `--list-targets` now shows detailed target information:
-  - Output name (e.g., "LVDS", "USB") - differentiates ports
-  - Port numbers (IN/OUT) and multiport flag
-  - SDK version
-  - Product ID
-- **Files:** `src/DirettaSync.cpp` (lines 269-325)
-
----
-
-## 2026-01-12 (thanks to @leeeanh)
-
-### 1. Power-of-2 Bitmask Modulo
-
-- Added `roundUpPow2()` helper function (lines 33-44)
-- Added `mask_` member variable (line 295)
-- `resize()` now rounds up to power-of-2 and sets `mask_ = size_ - 1`
-- Replaced all `% size_` with `& mask_` throughout:
-  - `getAvailable()` - line 69
-  - `getFreeSpace()` - line 73 (simplified)
-  - `push()` - line 106
-  - `push24BitPacked()` - lines 138, 141-142, 145
-  - `push16To32()` - lines 168, 172-174, 177
-  - `pushDSDPlanar()` - lines 214, 232-234, 237-239, 244
-  - `pop()` - line 268
-
-### 2. Cache-Line Separation
-
-- Added `alignas(64)` to `writePos_` (line 298)
-- Added `alignas(64)` to `readPos_` (line 299)
-
-### Performance Impact
-
-| Operation     | Before                              | After                           |
-| ------------- | ----------------------------------- | ------------------------------- |
-| Modulo        | `% size_` (10-20 cycles)            | `& mask_` (1 cycle)             |
-| False sharing | Possible between writePos_/readPos_ | Eliminated (64-byte separation) |
-
-### Note
-
-The buffer size will now be rounded up to the next power of 2. For example:
-- Request 3MB → allocate 4MB
-- Request 1.5MB → allocate 2MB
-
-This wastes some memory but the tradeoff is worth it for the consistent fast-path performance.
+**Files Changed:**
+- `src/DirettaSync.h` - Added `m_streamData` buffer
+- `src/DirettaSync.cpp` - Rewrote `getNewStream()` to bypass Stream class
+- `DirettaRendererUPnP.vcxproj` - Updated SDK paths to SDK 148
 
 ---
 
-## 2026-01-11 (thanks to @leeeanh)
+### Windows Build Fix: POSIX Header Removal
 
-### DirettaSync.h
+**Problem:** Build failed with `Cannot open include file: 'unistd.h'`
 
-- Removed `m_pushMutex`
-- Added `m_reconfiguring` and `m_ringUsers` atomics for lock-free access
-- Converted 11 format parameters to `std::atomic<>` (`m_sampleRate`, `m_channels`, `m_bytesPerSample`, etc.)
-- Added `ReconfigureGuard` RAII class
-- Added `beginReconfigure()` / `endReconfigure()` method declarations
+**Cause:** `DirettaRenderer.cpp` included `<unistd.h>` which is POSIX-only.
 
-### DirettaSync.cpp
+**Solution:**
+- Replaced `#include <unistd.h>` with `#include "Platform.h"`
+- Changed `gethostname()` to `Platform::getHostname()`
 
-- Added `RingAccessGuard` class for lock-free ring buffer access
-- Added `beginReconfigure()` / `endReconfigure()` implementations
-- Updated `sendAudio()` to use `RingAccessGuard` instead of mutex (lock-free hot path)
-- Updated `configureRingPCM()`, `configureRingDSD()`, `fullReset()` to use `ReconfigureGuard`
-- Updated all format parameter accesses to use atomic load/store with proper memory ordering
-
-### DirettaRingBuffer.h
-
-- Added `S24PackMode` enum (`Unknown`, `LsbAligned`, `MsbAligned`)
-- Added `detectS24PackMode()` method that checks first 32 samples
-- Updated `push24BitPacked()` to auto-detect and handle both S24 formats
-- S24 detection resets on `clear()` and `resize()`
+**Files Changed:**
+- `src/DirettaRenderer.cpp`
 
 ---
 
-## Key Benefits
+### New Build Script
 
-1. **Lock-free audio path** - `sendAudio()` no longer takes any mutex
-2. **Safe reconfiguration** - `ReconfigureGuard` waits for active readers to drain
-3. **S24 format flexibility** - Handles both LSB-aligned (FFmpeg S24_LE) and MSB-aligned formats automatically
+Added `build.bat` for convenient multi-architecture builds.
+
+**Usage:**
+```cmd
+build.bat              :: Build both x64 and ARM64 Release
+build.bat x64          :: Build x64 only
+build.bat arm64        :: Build ARM64 only
+build.bat debug        :: Build Debug configuration
+build.bat clean        :: Clean and rebuild
+```
+
+**Output Locations:**
+```
+bin\x64\Release\DirettaRendererUPnP.exe
+bin\ARM64\Release\DirettaRendererUPnP.exe
+```
+
+**Files Added:**
+- `build.bat`
+
+---
+
+### License Compliance Documentation
+
+Added third-party license documentation for LGPL compliance when distributing FFmpeg DLLs.
+
+**Files Added:**
+- `THIRD_PARTY_LICENSES.md` - Documents FFmpeg (LGPL), libupnp (BSD) licenses
+- `licenses/` directory for license texts
+
+---
+
+### Project Configuration
+
+**Visual Studio Requirements:**
+- Visual Studio 2022/2026 with MSVC v145 toolset
+- Windows 10/11 SDK
+
+**Dependencies (via vcpkg):**
+```cmd
+vcpkg install ffmpeg:x64-windows libupnp:x64-windows
+vcpkg install ffmpeg:arm64-windows libupnp:arm64-windows
+```
+
+**Diretta SDK:**
+- SDK 148 required (download from https://www.diretta.link)
+- Place in `..\DirettaHostSDK_148\`
+
+---
+
+## Previous Versions
+
+See the Linux version (DirettaRendererUPnP-X) CHANGELOG for detailed history of optimizations including:
+
+- DSD Flow Control (50x jitter reduction)
+- Consumer/Producer Generation Counters
+- Ring Buffer Optimizations
+- PCM Bypass Mode
+- DSD Conversion Function Specialization
+- And many more audio quality improvements
+
+These optimizations are shared between the Linux and Windows codebases.
