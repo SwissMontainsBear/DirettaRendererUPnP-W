@@ -721,6 +721,7 @@ void DirettaSync::fullReset() {
         m_isLowBitrate.store(false, std::memory_order_release);
         m_need24BitPack.store(false, std::memory_order_release);
         m_need16To32Upsample.store(false, std::memory_order_release);
+        m_need16To24Upsample.store(false, std::memory_order_release);
 
         m_ringBuffer.clear();
 
@@ -871,6 +872,7 @@ void DirettaSync::configureRingPCM(int rate, int channels, int direttaBps, int i
     m_inputBytesPerSample.store(inputBps, std::memory_order_release);
     m_need24BitPack.store(direttaBps == 3 && inputBps == 4, std::memory_order_release);
     m_need16To32Upsample.store(direttaBps == 4 && inputBps == 2, std::memory_order_release);
+    m_need16To24Upsample.store(direttaBps == 3 && inputBps == 2, std::memory_order_release);
     m_isDsdMode.store(false, std::memory_order_release);
     m_needDsdBitReversal.store(false, std::memory_order_release);
     m_needDsdByteSwap.store(false, std::memory_order_release);
@@ -904,6 +906,7 @@ void DirettaSync::configureRingDSD(uint32_t byteRate, int channels) {
     m_isDsdMode.store(true, std::memory_order_release);
     m_need24BitPack.store(false, std::memory_order_release);
     m_need16To32Upsample.store(false, std::memory_order_release);
+    m_need16To24Upsample.store(false, std::memory_order_release);
     m_channels.store(channels, std::memory_order_release);
     m_isLowBitrate.store(false, std::memory_order_release);
 
@@ -1035,6 +1038,7 @@ size_t DirettaSync::sendAudio(const uint8_t* data, size_t numSamples) {
         m_cachedDsdMode = m_isDsdMode.load(std::memory_order_acquire);
         m_cachedPack24bit = m_need24BitPack.load(std::memory_order_acquire);
         m_cachedUpsample16to32 = m_need16To32Upsample.load(std::memory_order_acquire);
+        m_cachedUpsample16to24 = m_need16To24Upsample.load(std::memory_order_acquire);
         m_cachedNeedBitReversal = m_needDsdBitReversal.load(std::memory_order_acquire);
         m_cachedNeedByteSwap = m_needDsdByteSwap.load(std::memory_order_acquire);
         m_cachedChannels = m_channels.load(std::memory_order_acquire);
@@ -1046,6 +1050,7 @@ size_t DirettaSync::sendAudio(const uint8_t* data, size_t numSamples) {
     bool dsdMode = m_cachedDsdMode;
     bool pack24bit = m_cachedPack24bit;
     bool upsample16to32 = m_cachedUpsample16to32;
+    bool upsample16to24 = m_cachedUpsample16to24;
     bool needBitReversal = m_cachedNeedBitReversal;
     bool needByteSwap = m_cachedNeedByteSwap;
     int numChannels = m_cachedChannels;
@@ -1082,6 +1087,14 @@ size_t DirettaSync::sendAudio(const uint8_t* data, size_t numSamples) {
 
         written = m_ringBuffer.push16To32(data, totalBytes);
         formatLabel = "PCM16->32";
+
+    } else if (upsample16to24) {
+        // PCM 16->24 (sink only supports 24-bit, not 32-bit)
+        size_t bytesPerFrame = 2 * numChannels;
+        totalBytes = numSamples * bytesPerFrame;
+
+        written = m_ringBuffer.push16To24(data, totalBytes);
+        formatLabel = "PCM16->24";
 
     } else {
         // PCM direct copy

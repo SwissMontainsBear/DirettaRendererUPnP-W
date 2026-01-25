@@ -336,6 +336,7 @@ private:
     std::atomic<int> m_bytesPerBuffer{176};
     std::atomic<bool> m_need24BitPack{false};
     std::atomic<bool> m_need16To32Upsample{false};
+    std::atomic<bool> m_need16To24Upsample{false};
     std::atomic<bool> m_isDsdMode{false};
     std::atomic<bool> m_needDsdBitReversal{false};
     std::atomic<bool> m_needDsdByteSwap{false};  // For LITTLE endian targets
@@ -358,6 +359,7 @@ private:
     bool m_cachedDsdMode{false};
     bool m_cachedPack24bit{false};
     bool m_cachedUpsample16to32{false};
+    bool m_cachedUpsample16to24{false};
     bool m_cachedNeedBitReversal{false};
     bool m_cachedNeedByteSwap{false};
     int m_cachedChannels{2};

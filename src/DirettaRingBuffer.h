@@ -186,6 +186,38 @@ public:
     }
 
     /**
+     * @brief Push with 16-to-24 bit upsampling
+     * For sinks that only support 24-bit (not 32-bit)
+     * @return Input bytes consumed
+     */
+    size_t push16To24(const uint8_t* data, size_t inputSize) {
+        size_t numSamples = inputSize / 2;
+        size_t outSize = numSamples * 3;
+        size_t free = getFreeSpace();
+
+        if (outSize > free) {
+            numSamples = free / 3;
+            outSize = numSamples * 3;
+        }
+        if (numSamples == 0) return 0;
+
+        size_t wp = writePos_.load(std::memory_order_acquire);
+
+        for (size_t i = 0; i < numSamples; i++) {
+            const uint8_t* src = data + i * 2;
+            size_t dstPos = (wp + i * 3) & mask_;
+
+            // Convert 16-bit to 24-bit: shift left by 8 bits (little-endian)
+            buffer_[dstPos] = 0;                          // LSB padding
+            buffer_[(dstPos + 1) & mask_] = src[0];       // 16-bit low byte
+            buffer_[(dstPos + 2) & mask_] = src[1];       // 16-bit high byte
+        }
+
+        writePos_.store((wp + outSize) & mask_, std::memory_order_release);
+        return inputSize;
+    }
+
+    /**
      * @brief Push DSD data from PLANAR input (FFmpeg format)
      *
      * Input format: [L0 L1 L2 L3...][R0 R1 R2 R3...] (planar, per-channel blocks)
